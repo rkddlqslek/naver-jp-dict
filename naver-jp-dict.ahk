@@ -8,6 +8,12 @@ global SuggestList := 0
 global SuggestItems := []
 global LastSuggestQuery := ""
 global CurrentDict := "jako"
+global DictConfigs := Map(
+    "jako", { Label: "일본어", AcCode: "jako", HomeUrl: "https://ja.dict.naver.com/", SearchUrl: "https://ja.dict.naver.com/#/search?query=" },
+    "enko", { Label: "영어", AcCode: "enko", HomeUrl: "https://en.dict.naver.com/", SearchUrl: "https://en.dict.naver.com/#/search?query=" },
+    "koko", { Label: "국어", AcCode: "koko", HomeUrl: "https://ko.dict.naver.com/", SearchUrl: "https://ko.dict.naver.com/#/search?query=" }
+)
+global DictOrder := ["jako", "enko", "koko"]
 
 #+j::ToggleOrSearch()
 
@@ -28,21 +34,23 @@ ToggleOrSearch() {
             }
         }
     }
-    ShowSearchGui()
+    ShowSearchGui(GetSelectedText())
 }
 
-ShowSearchGui() {
+ShowSearchGui(initialQuery := "") {
     global SearchGui, DictTab, SearchEdit, SuggestList, SuggestItems, LastSuggestQuery, CurrentDict
     SuggestItems := []
     LastSuggestQuery := ""
     CurrentDict := "jako"
     SearchGui := Gui("+MinimizeBox", "네이버 사전")
     SearchGui.SetFont("s10")
-    DictTab := SearchGui.Add("Tab3", "x12 y10 w420 h28 Choose1", ["일본어", "영어"])
+    DictTab := SearchGui.Add("Tab3", "x12 y10 w420 h28 Choose1", GetDictLabels())
     DictTab.OnEvent("Change", OnDictChanged)
     DictTab.UseTab()
     SearchGui.Add("Text", "x12 y+8", "검색어를 입력하세요")
     SearchEdit := SearchGui.Add("Edit", "x12 y+6 w420 vQuery")
+    if initialQuery != ""
+        SearchEdit.Value := initialQuery
     SearchEdit.OnEvent("Change", OnQueryChange)
     SuggestList := SearchGui.Add("ListBox", "x12 y+8 w420 r6 vSuggestionList Hidden")
     SuggestList.OnEvent("DoubleClick", UseSuggestion)
@@ -52,11 +60,14 @@ ShowSearchGui() {
     SearchGui.OnEvent("Escape", (*) => CloseGui())
     SearchGui.Show()
     SearchEdit.Focus()
+    if initialQuery != ""
+        SetTimer(FetchAndShowSuggestions, -50)
 }
 
 OnDictChanged(tab, *) {
-    global CurrentDict, SearchEdit
-    CurrentDict := tab.Value = 2 ? "enko" : "jako"
+    global CurrentDict, SearchEdit, DictOrder
+    if tab.Value >= 1 && tab.Value <= DictOrder.Length
+        CurrentDict := DictOrder[tab.Value]
     ClearSuggestions()
     if SearchEdit && Trim(SearchEdit.Value) != ""
         SetTimer(FetchAndShowSuggestions, -50)
@@ -146,18 +157,20 @@ CloseGui() {
 
 FetchSuggestions(query) {
     global CurrentDict
-    url := "https://ac-dict.naver.com/" CurrentDict "/ac?st=11&r_lt=10&q=" UriEncode(query) "&r_format=json&r_enc=UTF-8"
+    config := GetDictConfig(CurrentDict)
+    url := "https://ac-dict.naver.com/" config.AcCode "/ac?st=11&r_lt=10&q=" UriEncode(query) "&r_format=json&r_enc=UTF-8"
     try {
         http := ComObject("WinHttp.WinHttpRequest.5.1")
         http.SetTimeouts(1000, 1000, 1000, 2000)
         http.Open("GET", url, false)
         http.SetRequestHeader("Accept", "*/*")
-        http.SetRequestHeader("Accept-Language", "ko;q=0.6")
+        http.SetRequestHeader("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.4,ja;q=0.3")
         http.SetRequestHeader("Referer", GetRefererUrl())
+        http.SetRequestHeader("User-Agent", "Mozilla/5.0 Windows AutoHotkey NaverDict")
         http.Send()
         if http.Status != 200
             return []
-        return ParseSuggestions(http.ResponseText, CurrentDict)
+        return ParseSuggestions(http.ResponseText, config.AcCode)
     } catch {
         return []
     }
@@ -195,13 +208,36 @@ ParseSuggestions(json, dictCode) {
 
 GetRefererUrl() {
     global CurrentDict
-    return CurrentDict = "enko" ? "https://en.dict.naver.com/" : "https://ja.dict.naver.com/"
+    return GetDictConfig(CurrentDict).HomeUrl
 }
 
 GetSearchUrl(query) {
     global CurrentDict
-    baseUrl := CurrentDict = "enko" ? "https://en.dict.naver.com/#/search?query=" : "https://ja.dict.naver.com/#/search?query="
-    return baseUrl UriEncode(query)
+    return GetDictConfig(CurrentDict).SearchUrl UriEncode(query)
+}
+
+GetDictLabels() {
+    global DictConfigs, DictOrder
+    labels := []
+    for dictCode in DictOrder
+        labels.Push(DictConfigs[dictCode].Label)
+    return labels
+}
+
+GetDictConfig(dictCode) {
+    global DictConfigs
+    return DictConfigs.Has(dictCode) ? DictConfigs[dictCode] : DictConfigs["jako"]
+}
+
+GetSelectedText() {
+    savedClipboard := ClipboardAll()
+    A_Clipboard := ""
+    Send("^c")
+    selectedText := ""
+    if ClipWait(0.2)
+        selectedText := Trim(A_Clipboard)
+    A_Clipboard := savedClipboard
+    return selectedText
 }
 
 JsonUnescape(str) {
