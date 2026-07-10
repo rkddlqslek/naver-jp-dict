@@ -7,13 +7,15 @@ global SearchEdit := 0
 global SuggestList := 0
 global SuggestItems := []
 global LastSuggestQuery := ""
-global CurrentDict := "jako"
+global SearchHotkeysRegistered := false
+global SettingsPath := A_ScriptDir "\naver-jp-dict.ini"
 global DictConfigs := Map(
     "jako", { Label: "일본어", AcCode: "jako", HomeUrl: "https://ja.dict.naver.com/", SearchUrl: "https://ja.dict.naver.com/#/search?query=" },
     "enko", { Label: "영어", AcCode: "enko", HomeUrl: "https://en.dict.naver.com/", SearchUrl: "https://en.dict.naver.com/#/search?query=" },
     "koko", { Label: "국어", AcCode: "koko", HomeUrl: "https://ko.dict.naver.com/", SearchUrl: "https://ko.dict.naver.com/#/search?query=" }
 )
 global DictOrder := ["jako", "enko", "koko"]
+global CurrentDict := LoadLastDict()
 
 #+j::ToggleOrSearch()
 
@@ -41,10 +43,10 @@ ShowSearchGui(initialQuery := "") {
     global SearchGui, DictTab, SearchEdit, SuggestList, SuggestItems, LastSuggestQuery, CurrentDict
     SuggestItems := []
     LastSuggestQuery := ""
-    CurrentDict := "jako"
+    CurrentDict := LoadLastDict()
     SearchGui := Gui("+MinimizeBox", "네이버 사전")
     SearchGui.SetFont("s10")
-    DictTab := SearchGui.Add("Tab3", "x12 y10 w420 h28 Choose1", GetDictLabels())
+    DictTab := SearchGui.Add("Tab3", "x12 y10 w420 h28 Choose" GetDictTabIndex(CurrentDict), GetDictLabels())
     DictTab.OnEvent("Change", OnDictChanged)
     DictTab.UseTab()
     SearchGui.Add("Text", "x12 y+8", "검색어를 입력하세요")
@@ -59,6 +61,7 @@ ShowSearchGui(initialQuery := "") {
     SearchGui.OnEvent("Close", (*) => CloseGui())
     SearchGui.OnEvent("Escape", (*) => CloseGui())
     SearchGui.Show()
+    RegisterSearchHotkeys()
     SearchEdit.Focus()
     if initialQuery != ""
         SetTimer(FetchAndShowSuggestions, -50)
@@ -66,8 +69,10 @@ ShowSearchGui(initialQuery := "") {
 
 OnDictChanged(tab, *) {
     global CurrentDict, SearchEdit, DictOrder
-    if tab.Value >= 1 && tab.Value <= DictOrder.Length
+    if tab.Value >= 1 && tab.Value <= DictOrder.Length {
         CurrentDict := DictOrder[tab.Value]
+        SaveLastDict(CurrentDict)
+    }
     ClearSuggestions()
     if SearchEdit && Trim(SearchEdit.Value) != ""
         SetTimer(FetchAndShowSuggestions, -50)
@@ -136,23 +141,80 @@ DoSearch(*) {
 }
 
 UseSuggestion(*) {
-    global SearchEdit, SuggestList, SuggestItems
-    if !SearchEdit || !SuggestList || SuggestList.Value <= 0 || SuggestList.Value > SuggestItems.Length
-        return
-
-    SearchEdit.Value := SuggestItems[SuggestList.Value].Word
-    DoSearch()
+    AcceptSuggestion(true)
 }
 
 CloseGui() {
     global SearchGui, DictTab, SearchEdit, SuggestList
     if SearchGui {
+        UnregisterSearchHotkeys()
         try SearchGui.Destroy()
         SearchGui := 0
         DictTab := 0
         SearchEdit := 0
         SuggestList := 0
     }
+}
+
+RegisterSearchHotkeys() {
+    global SearchGui, SearchHotkeysRegistered
+    if !SearchGui || SearchHotkeysRegistered
+        return
+
+    HotIfWinActive("ahk_id " SearchGui.Hwnd)
+    Hotkey("Down", (*) => MoveSuggestion(1), "On")
+    Hotkey("Up", (*) => MoveSuggestion(-1), "On")
+    Hotkey("Tab", (*) => AcceptSuggestion(false), "On")
+    Hotkey("Enter", DoSearch, "On")
+    HotIf()
+    SearchHotkeysRegistered := true
+}
+
+UnregisterSearchHotkeys() {
+    global SearchGui, SearchHotkeysRegistered
+    if !SearchGui || !SearchHotkeysRegistered
+        return
+
+    HotIfWinActive("ahk_id " SearchGui.Hwnd)
+    for keyName in ["Down", "Up", "Tab", "Enter"] {
+        try Hotkey(keyName, "Off")
+    }
+    HotIf()
+    SearchHotkeysRegistered := false
+}
+
+MoveSuggestion(step) {
+    global SearchEdit, SuggestList, SuggestItems
+    if !SuggestList || !SuggestList.Visible || SuggestItems.Length = 0
+        return
+
+    current := SuggestList.Value
+    next := current + step
+    if current <= 0
+        next := step > 0 ? 1 : SuggestItems.Length
+    else if next < 1
+        next := SuggestItems.Length
+    else if next > SuggestItems.Length
+        next := 1
+
+    SuggestList.Choose(next)
+    if SearchEdit
+        SearchEdit.Focus()
+}
+
+AcceptSuggestion(searchNow := false) {
+    global SearchEdit, SuggestList, SuggestItems
+    if !SearchEdit || !SuggestList || !SuggestList.Visible
+        return false
+    if SuggestList.Value <= 0 || SuggestList.Value > SuggestItems.Length
+        return false
+
+    SearchEdit.Value := SuggestItems[SuggestList.Value].Word
+    ClearSuggestions()
+    SearchEdit.Focus()
+    if searchNow
+        DoSearch()
+    return true
 }
 
 FetchSuggestions(query) {
@@ -227,6 +289,30 @@ GetDictLabels() {
 GetDictConfig(dictCode) {
     global DictConfigs
     return DictConfigs.Has(dictCode) ? DictConfigs[dictCode] : DictConfigs["jako"]
+}
+
+GetDictTabIndex(dictCode) {
+    global DictOrder
+    for index, candidate in DictOrder {
+        if candidate = dictCode
+            return index
+    }
+    return 1
+}
+
+LoadLastDict() {
+    global SettingsPath, DictConfigs
+    try dictCode := IniRead(SettingsPath, "Settings", "LastDict", "jako")
+    catch
+        dictCode := "jako"
+    return DictConfigs.Has(dictCode) ? dictCode : "jako"
+}
+
+SaveLastDict(dictCode) {
+    global SettingsPath, DictConfigs
+    if !DictConfigs.Has(dictCode)
+        return
+    try IniWrite(dictCode, SettingsPath, "Settings", "LastDict")
 }
 
 GetSelectedText() {
